@@ -1,0 +1,68 @@
+services:
+  database:
+    image: docker.io/mariadb:10
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb-root-password
+    secrets:
+      - mariadb-root-password
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./mariadb/scripts:/scripts
+    healthcheck:
+      test: ["CMD", "sh", "/scripts/healthcheck.sh"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  init-keystone-db:
+    image: docker.io/mariadb:10
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb-root-password
+    secrets:
+      - mariadb-root-password
+      - keystone-db-password
+    volumes:
+      - ./keystone/scripts:/scripts
+    command:
+      - sh
+      - -c
+      - |
+        set -x
+        sh /scripts/create-my-cnf.sh
+        sh /scripts/wait-for-db.sh
+        sh /scripts/init-keystone-db.sh
+
+  keystone:
+    depends_on:
+      init-keystone-db:
+        condition: service_completed_successfully
+    image: quay.io/tripleomastercentos9/openstack-keystone:${TRIPLEO_TAG}
+    entrypoint: ["sh", "/entrypoint.sh"]
+    command: ["/usr/sbin/httpd", "-DFOREGROUND"]
+    volumes:
+      - "./keystone/entrypoint.sh:/entrypoint.sh"
+      - ./keystone/scripts:/scripts
+    environment:
+      OS_CLOUD: openstack
+    secrets:
+      - mariadb-root-password
+      - keystone-db-password
+      - keystone-admin-password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  db_data:
+
+secrets:
+  mariadb-root-password:
+    file: secrets/mariadb-root-password
+  keystone-db-password:
+    file: secrets/keystone-db-password
+  keystone-admin-password:
+    file: secrets/keystone-admin-password
