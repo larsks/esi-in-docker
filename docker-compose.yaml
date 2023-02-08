@@ -34,15 +34,8 @@ services:
       - keystone-db-password
     volumes:
       - "./common/scripts:/scripts/common"
-      - "./keystone/scripts:/scripts/keystone"
-    command:
-      - sh
-      - -c
-      - |
-        set -x
-        sh /scripts/common/create-my-cnf.sh
-        sh /scripts/common/wait-for-db.sh
-        sh /scripts/keystone/init-db.sh
+    command: >
+      sh /scripts/common/create-database.sh keystone keystone /run/secrets/keystone-db-password
 
   keystone:
     depends_on:
@@ -80,16 +73,9 @@ services:
       - mariadb-root-password
       - ironic-db-password
     volumes:
-      - "./ironic/scripts:/scripts/ironic"
       - "./common/scripts:/scripts/common"
-    command:
-      - sh
-      - -c
-      - |
-        set -x
-        sh /scripts/common/create-my-cnf.sh
-        sh /scripts/common/wait-for-db.sh
-        sh /scripts/ironic/init-db.sh
+    command: >
+      sh /scripts/common/create-database.sh ironic ironic /run/secrets/ironic-db-password
 
   ironic-api:
     depends_on:
@@ -116,6 +102,17 @@ services:
       - ironic-db-password
       - ironic-keystone-password
 
+  neutron-init-db:
+    image: docker.io/mariadb:10
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb-root-password
+    secrets:
+      - mariadb-root-password
+      - neutron-db-password
+    volumes:
+      - "./common/scripts:/scripts/common"
+    command: >
+      sh /scripts/common/create-database.sh neutron neutron /run/secrets/neutron-db-password
 
 volumes:
   config:
@@ -132,3 +129,7 @@ secrets:
     file: secrets/ironic-db-password
   ironic-keystone-password:
     file: secrets/ironic-keystone-password
+  neutron-db-password:
+    file: secrets/neutron-db-password
+  neutron-keystone-password:
+    file: secrets/neutron-keystone-password
