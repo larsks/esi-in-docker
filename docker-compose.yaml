@@ -1,3 +1,10 @@
+x-common:
+  environment: &os_env
+    OS_CLOUD: openstack-internal
+    OS_INTERFACE: internal
+    KEYSTONE_INTERNAL_URL: http://keystone:5000
+    KEYSTONE_PUBLIC_URL: "${KEYSTONE_PUBLIC_URL:-http://keystone:5000}"
+
 services:
   database:
     image: docker.io/mariadb:10
@@ -6,8 +13,8 @@ services:
     secrets:
       - mariadb-root-password
     volumes:
-      - db_data:/var/lib/mysql
-      - ./mariadb/scripts:/scripts
+      - "db_data:/var/lib/mysql"
+      - "./mariadb/scripts:/scripts"
     healthcheck:
       test: ["CMD", "sh", "/scripts/healthcheck.sh"]
       interval: 1m
@@ -15,7 +22,10 @@ services:
       retries: 3
       start_period: 10s
 
-  init-keystone-db:
+  cache:
+    image: docker.io/memcached:${MEMCACHE_VERSION:-latest}
+
+  keystone-init-db:
     image: docker.io/mariadb:10
     environment:
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb-root-password
@@ -23,27 +33,33 @@ services:
       - mariadb-root-password
       - keystone-db-password
     volumes:
-      - ./keystone/scripts:/scripts
+      - "./common/scripts:/scripts/common"
+      - "./keystone/scripts:/scripts/keystone"
     command:
       - sh
       - -c
       - |
         set -x
-        sh /scripts/create-my-cnf.sh
-        sh /scripts/wait-for-db.sh
-        sh /scripts/init-keystone-db.sh
+        sh /scripts/common/create-my-cnf.sh
+        sh /scripts/common/wait-for-db.sh
+        sh /scripts/keystone/init-db.sh
 
   keystone:
     depends_on:
-      init-keystone-db:
+      keystone-init-db:
         condition: service_completed_successfully
-    image: quay.io/tripleomastercentos9/openstack-keystone:${TRIPLEO_TAG}
+    image: quay.io/tripleomastercentos9/openstack-keystone:${TRIPLEO_TAG:-current-tripleo}
+    ports:
+      - "${LISTEN_ADDRESS:-127.0.0.1}:5000:5000"
     entrypoint: ["sh", "/entrypoint.sh"]
     command: ["/usr/sbin/httpd", "-DFOREGROUND"]
     volumes:
       - "./keystone/entrypoint.sh:/entrypoint.sh"
-      - ./keystone/scripts:/scripts
+      - "./keystone/scripts:/scripts"
+      - "./common/scripts:/scripts/common"
+      - "config:/config"
     environment:
+      <<: *os_env
       OS_CLOUD: openstack
     secrets:
       - mariadb-root-password
@@ -56,7 +72,53 @@ services:
       retries: 3
       start_period: 10s
 
+  ironic-init-db:
+    image: docker.io/mariadb:10
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb-root-password
+    secrets:
+      - mariadb-root-password
+      - ironic-db-password
+    volumes:
+      - "./ironic/scripts:/scripts/ironic"
+      - "./common/scripts:/scripts/common"
+    command:
+      - sh
+      - -c
+      - |
+        set -x
+        sh /scripts/common/create-my-cnf.sh
+        sh /scripts/common/wait-for-db.sh
+        sh /scripts/ironic/init-db.sh
+
+  ironic-api:
+    depends_on:
+      ironic-init-db:
+        condition: service_completed_successfully
+    image: quay.io/tripleomastercentos9/openstack-ironic-api:${TRIPLEO_TAG:-current-tripleo}
+    ports:
+      - "${LISTEN_ADDRESS:-127.0.0.1}:6385:6385"
+    user: root
+    entrypoint: ["sh", "/entrypoint.sh"]
+    command: ["ironic-api"]
+    volumes:
+      - "./ironic/entrypoint.sh:/entrypoint.sh"
+      - "./ironic/scripts:/scripts/ironic"
+      - "./common/scripts:/scripts/common"
+      - "config:/config"
+    environment:
+      <<: *os_env
+      IRONIC_INTERNAL_URL: http://ironic:6385
+      IRONIC_PUBLIC_URL: "${IRONIC_PUBLIC_URL:-http://ironic:6384}"
+    secrets:
+      - mariadb-root-password
+      - keystone-admin-password
+      - ironic-db-password
+      - ironic-keystone-password
+
+
 volumes:
+  config:
   db_data:
 
 secrets:
@@ -66,3 +128,7 @@ secrets:
     file: secrets/keystone-db-password
   keystone-admin-password:
     file: secrets/keystone-admin-password
+  ironic-db-password:
+    file: secrets/ironic-db-password
+  ironic-keystone-password:
+    file: secrets/ironic-keystone-password
